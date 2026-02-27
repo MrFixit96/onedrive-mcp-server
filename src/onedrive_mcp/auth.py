@@ -24,12 +24,10 @@ import msal
 
 logger = logging.getLogger("onedrive_mcp.auth")
 
-# Microsoft Office Desktop Apps — a Microsoft first-party app used by Word,
-# Excel, and PowerPoint to access OneDrive files.  Pre-authorized for
-# Files.ReadWrite on Microsoft Graph and pre-approved in every enterprise
-# tenant.  Supports device code flow.
+# Microsoft Graph Command Line Tools — a Microsoft first-party app
+# commonly used for CLI-based Graph API access.  Supports device code flow.
 # Override with ONEDRIVE_MCP_CLIENT_ID env var if needed.
-DEFAULT_CLIENT_ID = "d3590ed6-52b3-4102-aeff-aad2292ab01c"
+DEFAULT_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 DEFAULT_TENANT = "organizations"
 
 KEYRING_SERVICE = "onedrive-mcp"
