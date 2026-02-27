@@ -24,10 +24,14 @@ import msal
 
 logger = logging.getLogger("onedrive_mcp.auth")
 
-# Microsoft Graph Command Line Tools — a Microsoft first-party multi-tenant
-# public client app designed for CLI access to Graph API.  Pre-approved in
-# most enterprise tenants.  Override with ONEDRIVE_MCP_CLIENT_ID env var.
-DEFAULT_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
+# VS Code's Microsoft authentication client ID — a Microsoft first-party
+# multi-tenant public client, publicly embedded in VS Code's MIT-licensed
+# source (extensions/microsoft-authentication/src/common/scopeData.ts).
+# Pre-approved in virtually every enterprise tenant that uses VS Code.
+# Supports device code flow and dynamic consent for any Graph scope.
+# Override with ONEDRIVE_MCP_CLIENT_ID env var if needed.
+DEFAULT_CLIENT_ID = "aebc6443-996d-45c2-90f0-388ff96faa56"
+DEFAULT_TENANT = "organizations"
 
 KEYRING_SERVICE = "onedrive-mcp"
 KEYRING_KEY = "msal_token_cache"
@@ -67,10 +71,10 @@ class Auth:
     def __init__(
         self,
         client_id: str | None = None,
-        tenant_id: str = "common",
+        tenant_id: str | None = None,
     ):
         self.client_id = client_id or DEFAULT_CLIENT_ID
-        self.tenant_id = tenant_id
+        self.tenant_id = tenant_id or DEFAULT_TENANT
         self._use_keyring = _keyring_available()
         self._use_broker = _broker_available() and sys.platform == "win32"
         self.cache = msal.SerializableTokenCache()
@@ -82,7 +86,7 @@ class Auth:
 
         self.app = msal.PublicClientApplication(
             self.client_id,
-            authority=f"https://login.microsoftonline.com/{tenant_id}",
+            authority=f"https://login.microsoftonline.com/{self.tenant_id}",
             token_cache=self.cache,
             **broker_kwargs,
         )

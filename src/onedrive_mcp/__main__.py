@@ -21,7 +21,7 @@ def _run_auth() -> None:
 
     # Both are optional — defaults to Microsoft Graph CLI Tools client ID
     client_id = os.environ.get("ONEDRIVE_MCP_CLIENT_ID") or None
-    tenant_id = os.environ.get("ONEDRIVE_MCP_TENANT_ID", "common")
+    tenant_id = os.environ.get("ONEDRIVE_MCP_TENANT_ID") or None
 
     auth = Auth(client_id, tenant_id)
     try:

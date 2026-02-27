@@ -58,7 +58,7 @@ class TestGetGraph:
             graph = _get_graph()
             assert graph == "graph_instance"
             # Should have been called with None (which Auth defaults to Graph CLI ID)
-            mock_auth.assert_called_once_with(None, "common")
+            mock_auth.assert_called_once_with(None, None)
 
 
 class TestAuditedToolDecorator:

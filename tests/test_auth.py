@@ -34,10 +34,10 @@ class TestAuthInit:
     @patch("onedrive_mcp.auth._broker_available", return_value=False)
     @patch("onedrive_mcp.auth._keyring_available", return_value=False)
     @patch("onedrive_mcp.auth.CACHE_FILE")
-    def test_default_tenant_is_common(self, mock_cache, mock_kr, mock_br):
+    def test_default_tenant_is_organizations(self, mock_cache, mock_kr, mock_br):
         mock_cache.exists.return_value = False
         auth = Auth("test-client-id")
-        assert auth.tenant_id == "common"
+        assert auth.tenant_id == "organizations"
 
     @patch("onedrive_mcp.auth._broker_available", return_value=False)
     @patch("onedrive_mcp.auth._keyring_available", return_value=False)

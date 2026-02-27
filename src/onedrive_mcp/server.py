@@ -34,7 +34,7 @@ logger = logging.getLogger("onedrive_mcp.server")
 # ── Configuration ───────────────────────────────────────────────────────
 
 CLIENT_ID = os.environ.get("ONEDRIVE_MCP_CLIENT_ID") or None
-TENANT_ID = os.environ.get("ONEDRIVE_MCP_TENANT_ID", "common")
+TENANT_ID = os.environ.get("ONEDRIVE_MCP_TENANT_ID") or None
 DOWNLOAD_DIR = Path(os.environ.get("ONEDRIVE_MCP_DOWNLOAD_DIR", ".")).resolve()
 
 mcp = FastMCP(
