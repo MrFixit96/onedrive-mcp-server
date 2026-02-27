@@ -11,6 +11,7 @@ from onedrive_mcp.server import (
     _get_graph,
     _redact_path,
     _resolve_share_url,
+    _validate_spo_url,
     audited_tool,
     mcp,
 )
@@ -290,3 +291,137 @@ class TestResolveShareUrl:
 
         # On actual Windows it'll find registry accounts; this tests the env var parsing
         assert len(accounts) >= 1
+
+
+class TestValidateSpoUrl:
+    """Security tests for URL validation against injection attacks."""
+
+    def test_rejects_javascript_protocol(self):
+        assert _validate_spo_url("javascript:alert(1)") is None
+
+    def test_rejects_file_protocol(self):
+        assert _validate_spo_url("file:///etc/passwd") is None
+
+    def test_rejects_data_protocol(self):
+        assert _validate_spo_url("data:text/html,<script>alert(1)</script>") is None
+
+    def test_rejects_http_non_tls(self):
+        assert _validate_spo_url("http://contoso.sharepoint.com/personal/u") is None
+
+    def test_rejects_non_sharepoint_domain(self):
+        assert _validate_spo_url("https://evil.com/personal/user") is None
+
+    def test_strips_crlf_injection(self):
+        result = _validate_spo_url(
+            "https://contoso-my.sharepoint.com/personal/u\r\nX-Injected: true"
+        )
+        assert result is not None
+        assert "\r" not in result
+        assert "\n" not in result
+
+    def test_accepts_valid_sharepoint_url(self):
+        result = _validate_spo_url(
+            "https://ibm-my.sharepoint.com/personal/james_anderton_ibm_com"
+        )
+        assert result == "https://ibm-my.sharepoint.com/personal/james_anderton_ibm_com"
+
+    def test_strips_trailing_slash(self):
+        result = _validate_spo_url(
+            "https://contoso.sharepoint.com/personal/user/"
+        )
+        assert result is not None
+        assert not result.endswith("/")
+
+    def test_rejects_empty_string(self):
+        assert _validate_spo_url("") is None
+
+    def test_rejects_garbage(self):
+        assert _validate_spo_url("not a url at all") is None
+
+
+class TestShareUrlSecurityEdgeCases:
+    """End-to-end security tests for generate_share_url pipeline."""
+
+    def test_malicious_registry_url_rejected(self, tmp_path):
+        test_file = tmp_path / "file.txt"
+        test_file.write_text("test")
+
+        malicious_accounts = [
+            {
+                "local_folder": str(tmp_path),
+                "spo_url": "javascript:alert('xss')",
+                "email": "user@contoso.com",
+                "type": "business",
+            }
+        ]
+
+        with patch(
+            "onedrive_mcp.server._discover_onedrive_accounts",
+            return_value=malicious_accounts,
+        ):
+            result = _resolve_share_url(str(test_file))
+
+        # Should NOT produce a URL with javascript: scheme
+        assert "url" not in result or "javascript:" not in result.get("url", "")
+
+    def test_special_chars_in_filename_encoded(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        test_file = docs / "report#1;drop=table.docx"
+        test_file.write_text("test")
+
+        fake_accounts = [
+            {
+                "local_folder": str(tmp_path),
+                "spo_url": "https://c-my.sharepoint.com/personal/u",
+                "email": "u@c.com",
+                "type": "business",
+            }
+        ]
+
+        with patch(
+            "onedrive_mcp.server._discover_onedrive_accounts",
+            return_value=fake_accounts,
+        ):
+            result = _resolve_share_url(str(test_file))
+
+        assert "url" in result
+        url = result["url"]
+        # Hash and semicolons must be encoded
+        assert "#" not in url.split("Documents/")[1]
+        assert ";" not in url.split("Documents/")[1]
+
+    def test_symlink_traversal_blocked(self, tmp_path):
+        """Symlinks resolving outside OneDrive folder should be rejected."""
+        od_folder = tmp_path / "OneDrive"
+        od_folder.mkdir()
+        secret_dir = tmp_path / "secrets"
+        secret_dir.mkdir()
+        secret_file = secret_dir / "passwords.txt"
+        secret_file.write_text("hunter2")
+
+        # Create symlink inside OneDrive pointing outside
+        link = od_folder / "sneaky_link.txt"
+        try:
+            link.symlink_to(secret_file)
+        except OSError:
+            pytest.skip("Cannot create symlinks on this system")
+
+        fake_accounts = [
+            {
+                "local_folder": str(od_folder),
+                "spo_url": "https://c-my.sharepoint.com/personal/u",
+                "email": "u@c.com",
+                "type": "business",
+            }
+        ]
+
+        with patch(
+            "onedrive_mcp.server._discover_onedrive_accounts",
+            return_value=fake_accounts,
+        ):
+            result = _resolve_share_url(str(link))
+
+        # Path.resolve() follows symlink → secret_dir which is outside od_folder
+        assert "error" in result
+        assert "not inside" in result["error"].lower()

@@ -14,13 +14,14 @@ Errors are sanitized before returning to the LLM.
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections.abc import Callable, Coroutine
 from functools import wraps
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 if sys.platform == "win32":
     import winreg
@@ -304,6 +305,25 @@ async def search_files(query: str) -> str:
     return json.dumps(results, indent=2)
 
 
+def _validate_spo_url(raw_url: str) -> str | None:
+    """Validate and sanitize a SharePoint URL from untrusted sources.
+
+    Rejects non-HTTPS schemes, non-SharePoint domains, and strips
+    control characters (CRLF injection defense).
+    """
+    cleaned = re.sub(r"[\r\n\x00-\x1f]", "", raw_url.strip())
+    try:
+        parsed = urlparse(cleaned)
+    except Exception:
+        return None
+    if parsed.scheme != "https":
+        return None
+    if not parsed.netloc.endswith(".sharepoint.com"):
+        return None
+    # Reconstruct from parsed parts to drop fragments/query injection
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+
+
 def _discover_onedrive_accounts() -> list[dict[str, str]]:
     """Read OneDrive account mappings from the Windows registry.
 
@@ -336,8 +356,11 @@ def _discover_onedrive_accounts() -> list[dict[str, str]]:
                     try:
                         endpoint = winreg.QueryValueEx(sub_key, "ServiceEndpointUri")[0]
                         # Strip /_api suffix to get the base SharePoint URL
-                        spo_url = endpoint.rsplit("/_api", 1)[0]
-                        acct_type = "business"
+                        raw = endpoint.rsplit("/_api", 1)[0]
+                        validated = _validate_spo_url(raw)
+                        if validated:
+                            spo_url = validated
+                            acct_type = "business"
                     except FileNotFoundError:
                         pass
                     try:
@@ -361,12 +384,14 @@ def _discover_onedrive_accounts() -> list[dict[str, str]]:
         for entry in share_map.split(";"):
             if "|" in entry:
                 local, url = entry.split("|", 1)
-                accounts.append({
-                    "local_folder": local.strip(),
-                    "spo_url": url.strip(),
-                    "email": "",
-                    "type": "business",
-                })
+                validated = _validate_spo_url(url.strip())
+                if validated:
+                    accounts.append({
+                        "local_folder": local.strip(),
+                        "spo_url": validated,
+                        "email": "",
+                        "type": "business",
+                    })
 
     return accounts
 
@@ -395,11 +420,15 @@ def _resolve_share_url(local_path: str) -> dict[str, str]:
             continue
 
         if acct["type"] == "business" and acct["spo_url"]:
+            # Defense-in-depth: re-validate URL before use
+            validated_url = _validate_spo_url(acct["spo_url"])
+            if not validated_url:
+                continue
             # Business: construct SharePoint URL
             # OneDrive Business syncs to /Documents/ library
             rel_posix = rel.as_posix()
             encoded_path = quote(rel_posix, safe="/")
-            url = f"{acct['spo_url']}/Documents/{encoded_path}"
+            url = f"{validated_url}/Documents/{encoded_path}"
             return {
                 "url": url,
                 "account_email": acct["email"],
