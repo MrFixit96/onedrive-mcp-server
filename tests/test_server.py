@@ -4,8 +4,6 @@ import json
 import logging
 from unittest.mock import patch
 
-import pytest
-
 from onedrive_mcp.server import (
     _get_graph,
     _redact_path,
@@ -44,14 +42,23 @@ class TestRedactPath:
 
 
 class TestGetGraph:
-    def test_missing_client_id_raises(self):
-        with patch("onedrive_mcp.server.CLIENT_ID", ""):
-            # Reset cached graph
-            import onedrive_mcp.server as srv
-            srv._graph = None
-            srv._auth = None
-            with pytest.raises(RuntimeError, match="ONEDRIVE_MCP_CLIENT_ID"):
-                _get_graph()
+    def test_default_client_id_creates_graph(self):
+        """With no env var, _get_graph uses the default client ID (no error)."""
+        import onedrive_mcp.server as srv
+
+        srv._graph = None
+        srv._auth = None
+        with (
+            patch("onedrive_mcp.server.CLIENT_ID", None),
+            patch("onedrive_mcp.server.Auth") as mock_auth,
+            patch("onedrive_mcp.server.GraphClient") as mock_gc,
+        ):
+            mock_auth.return_value = "auth_instance"
+            mock_gc.return_value = "graph_instance"
+            graph = _get_graph()
+            assert graph == "graph_instance"
+            # Should have been called with None (which Auth defaults to Graph CLI ID)
+            mock_auth.assert_called_once_with(None, "common")
 
 
 class TestAuditedToolDecorator:

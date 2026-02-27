@@ -1,8 +1,16 @@
 """Secure MSAL authentication for Microsoft Graph API.
 
-Primary storage: OS keyring (Windows Credential Vault, macOS Keychain,
-Linux SecretService). Falls back to an owner-only file if keyring is
-unavailable.
+Zero-config SSO: Uses the Microsoft Graph Command Line Tools client ID
+by default so users can sign in with their corporate Microsoft account
+without registering an Azure AD app.
+
+Auth methods tried in order:
+1. Cached token (silent refresh)
+2. WAM broker on Windows (native SSO popup — uses existing Windows account)
+3. Device code flow (user visits URL and enters a code)
+
+Token storage: OS keyring primary (Windows Credential Vault, macOS
+Keychain, Linux SecretService), file fallback with owner-only perms.
 """
 
 import logging
@@ -15,6 +23,11 @@ from pathlib import Path
 import msal
 
 logger = logging.getLogger("onedrive_mcp.auth")
+
+# Microsoft Graph Command Line Tools — a Microsoft first-party multi-tenant
+# public client app designed for CLI access to Graph API.  Pre-approved in
+# most enterprise tenants.  Override with ONEDRIVE_MCP_CLIENT_ID env var.
+DEFAULT_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 
 KEYRING_SERVICE = "onedrive-mcp"
 KEYRING_KEY = "msal_token_cache"
@@ -29,7 +42,6 @@ def _keyring_available() -> bool:
         import keyring
         import keyring.errors
 
-        # Probe for a real backend (not the fail backend)
         backend = keyring.get_keyring()
         name = type(backend).__name__
         if "Fail" in name or "null" in name.lower():
@@ -39,20 +51,44 @@ def _keyring_available() -> bool:
         return False
 
 
-class Auth:
-    """MSAL public client auth with OS-keyring-backed token caching."""
+def _broker_available() -> bool:
+    """Check if WAM broker (pymsalruntime) is installed."""
+    try:
+        import pymsalruntime  # noqa: F401
 
-    def __init__(self, client_id: str, tenant_id: str = "common"):
-        self.client_id = client_id
+        return True
+    except ImportError:
+        return False
+
+
+class Auth:
+    """MSAL public client auth with SSO broker + OS-keyring token caching."""
+
+    def __init__(
+        self,
+        client_id: str | None = None,
+        tenant_id: str = "common",
+    ):
+        self.client_id = client_id or DEFAULT_CLIENT_ID
         self.tenant_id = tenant_id
         self._use_keyring = _keyring_available()
+        self._use_broker = _broker_available() and sys.platform == "win32"
         self.cache = msal.SerializableTokenCache()
         self._load_cache()
+
+        broker_kwargs = {}
+        if self._use_broker:
+            broker_kwargs["enable_broker_on_windows"] = True
+
         self.app = msal.PublicClientApplication(
-            client_id,
+            self.client_id,
             authority=f"https://login.microsoftonline.com/{tenant_id}",
             token_cache=self.cache,
+            **broker_kwargs,
         )
+
+        if self._use_broker:
+            logger.debug("WAM broker enabled for SSO")
         if self._use_keyring:
             logger.debug("Using OS keyring for token storage")
         else:
@@ -144,7 +180,28 @@ class Auth:
         )
 
     def authenticate_interactive(self) -> str:
-        """Run device code flow. Call from CLI only, not from MCP server."""
+        """Authenticate the user. Tries broker SSO first, falls back to device code."""
+        # Try WAM broker (Windows SSO) — pops a native dialog, uses existing account
+        if self._use_broker:
+            try:
+                print("Signing in via Windows SSO...", file=sys.stderr)
+                result = self.app.acquire_token_interactive(
+                    scopes=SCOPES,
+                    parent_window_handle=self.app.CONSOLE_WINDOW_HANDLE,
+                    prompt="select_account",
+                )
+                if result and "access_token" in result:
+                    self._save_cache()
+                    return result["access_token"]
+                # Broker didn't work — fall through to device code
+                logger.debug(
+                    "Broker auth returned no token: %s",
+                    result.get("error_description", "unknown"),
+                )
+            except Exception as exc:
+                logger.debug("Broker auth failed, falling back to device code: %s", exc)
+
+        # Device code flow — works everywhere
         flow = self.app.initiate_device_flow(scopes=SCOPES)
         if "user_code" not in flow:
             raise RuntimeError(

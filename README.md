@@ -15,31 +15,30 @@ Built as a secure alternative after a [security audit](https://github.com/MrFixi
 | `download_file` | Download files with path-traversal protection |
 | `create_sharing_link` | Generate view or edit sharing links |
 
+## Quick Start
+
+```bash
+# Install
+pip install git+https://github.com/MrFixit96/onedrive-mcp-server.git
+
+# Sign in with your Microsoft account (SSO — no app registration needed)
+onedrive-mcp auth
+```
+
+That's it. On Windows, a native SSO popup uses your existing Microsoft account.
+On other platforms, you'll get a device code to enter at microsoft.com/devicelogin.
+Your org's SSO handles the rest.
+
 ## Security
 
-This server was designed to address specific vulnerabilities found in existing MCP servers:
-
+- **Zero-config auth**: Uses Microsoft Graph Command Line Tools client ID (pre-approved in most enterprise tenants) — no Azure AD app registration required
+- **Windows SSO**: WAM broker integration uses your existing Windows Microsoft account
+- **OS keyring token storage**: Windows Credential Vault, macOS Keychain, or Linux SecretService (falls back to owner-only file)
 - **Narrow OAuth scopes**: Only `Files.ReadWrite` + `User.Read` — no mail, calendar, or contacts access
-- **Secure token cache**: File permissions restricted to owner only (`chmod 600` / `icacls`)
+- **Error sanitization**: Bearer tokens, correlation IDs, and internal URLs stripped from all error messages before reaching the LLM
+- **Audit logging**: Structured JSON to stderr — every tool invocation logged with timing, redacted args, and status
 - **Path traversal protection**: Download paths validated against a safe base directory
 - **No eval/literal_eval**: Zero use of `eval`, `ast.literal_eval`, or `exec`
-- **No auto-redirect**: HTTP client does not follow redirects automatically
-- **Input validation**: All tool inputs validated before Graph API calls
-
-## Prerequisites
-
-### Azure AD App Registration
-
-1. Go to [Azure Portal → App Registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps)
-2. Click **New registration**
-   - Name: `OneDrive MCP`
-   - Supported account types: **Accounts in any organizational directory and personal Microsoft accounts**
-3. Under **Authentication** → **Add a platform** → **Mobile and desktop applications**
-   - Redirect URI: `https://login.microsoftonline.com/common/oauth2/nativeclient`
-4. Under **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions**:
-   - `Files.ReadWrite`
-   - `User.Read`
-5. Copy the **Application (client) ID** from the Overview page
 
 ## Installation
 
@@ -49,39 +48,45 @@ git clone https://github.com/MrFixit96/onedrive-mcp-server.git
 cd onedrive-mcp-server
 pip install -e .
 
-# Or install directly from GitHub
-pip install git+https://github.com/MrFixit96/onedrive-mcp-server.git
+# Optional: install Windows SSO broker support
+pip install -e ".[broker]"
+
+# Optional: install dev tools (pytest, ruff)
+pip install -e ".[dev]"
 ```
 
 ## Authentication
 
 ```bash
-# Set your client ID
-export ONEDRIVE_MCP_CLIENT_ID=<your-client-id>
-
-# Optional: set tenant (default: "common" for multi-tenant)
-export ONEDRIVE_MCP_TENANT_ID=<your-tenant-id>
-
-# Run interactive device-code auth
+# Just sign in — no environment variables needed
 onedrive-mcp auth
 ```
 
-This opens a browser-based sign-in flow. Tokens are cached securely at `~/.config/onedrive-mcp/token_cache.json` with owner-only file permissions.
+**On Windows** (with broker installed): A native SSO popup appears using your existing Windows Microsoft account. One click, done.
+
+**On other platforms**: Device code flow — visit the URL shown, enter the code, sign in with your corporate email. Your org's SSO/identity provider handles the login automatically.
+
+Tokens are cached securely in your OS keyring (Windows Credential Vault / macOS Keychain / Linux SecretService).
+
+### Advanced: Custom Azure AD App
+
+If your organization requires a specific app registration, you can override the default:
+
+```bash
+export ONEDRIVE_MCP_CLIENT_ID=<your-client-id>
+export ONEDRIVE_MCP_TENANT_ID=<your-tenant-id>
+onedrive-mcp auth
+```
 
 ## MCP Server Configuration
 
 ### Claude Code
 
-Add to your Claude Code MCP settings (`.claude/settings.json` or via `claude mcp add`):
-
 ```json
 {
   "mcpServers": {
     "onedrive": {
-      "command": "onedrive-mcp",
-      "env": {
-        "ONEDRIVE_MCP_CLIENT_ID": "<your-client-id>"
-      }
+      "command": "onedrive-mcp"
     }
   }
 }
@@ -89,16 +94,11 @@ Add to your Claude Code MCP settings (`.claude/settings.json` or via `claude mcp
 
 ### GitHub Copilot CLI
 
-Add to your MCP configuration:
-
 ```json
 {
   "mcpServers": {
     "onedrive": {
-      "command": "onedrive-mcp",
-      "env": {
-        "ONEDRIVE_MCP_CLIENT_ID": "<your-client-id>"
-      }
+      "command": "onedrive-mcp"
     }
   }
 }
@@ -108,9 +108,10 @@ Add to your MCP configuration:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ONEDRIVE_MCP_CLIENT_ID` | Yes | — | Azure AD app registration client ID |
-| `ONEDRIVE_MCP_TENANT_ID` | No | `common` | Azure AD tenant ID |
+| `ONEDRIVE_MCP_CLIENT_ID` | No | Graph CLI Tools ID | Override with custom Azure AD app client ID |
+| `ONEDRIVE_MCP_TENANT_ID` | No | `common` | Azure AD tenant ID (multi-tenant by default) |
 | `ONEDRIVE_MCP_DOWNLOAD_DIR` | No | `.` (cwd) | Base directory for file downloads |
+| `ONEDRIVE_MCP_LOG_LEVEL` | No | `INFO` | Audit log level (DEBUG, INFO, WARNING, ERROR) |
 
 ## Usage Examples
 
@@ -130,21 +131,52 @@ Once configured as an MCP server, tools are available to your AI assistant:
 → calls search_files("quarterly budget")
 ```
 
+## Development
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests (43 tests)
+pytest tests/ -v
+
+# Lint
+ruff check src/ tests/
+
+# Auto-fix lint issues
+ruff check src/ tests/ --fix
+```
+
 ## Architecture
 
 ```
 src/onedrive_mcp/
 ├── __init__.py       # Package metadata
 ├── __main__.py       # CLI: auth subcommand + server startup
-├── auth.py           # MSAL device-code flow + secure token cache
-├── graph.py          # Async Microsoft Graph client (httpx)
-└── server.py         # FastMCP server with 6 tools
+├── auth.py           # SSO broker + device-code flow + OS keyring cache
+├── graph.py          # Async Microsoft Graph client (httpx) + error sanitization
+└── server.py         # FastMCP server with 6 tools + audit logging
 ```
 
-- **~250 lines** of core logic (auth + graph + server)
+- **~350 lines** of core logic (auth + graph + server)
+- **43 tests** covering auth, graph API, server tools, error sanitization, audit logging
 - **Zero** third-party MCP wrappers — uses official `mcp` SDK
 - **Async** httpx for HTTP, sync MSAL wrapped via `asyncio.to_thread`
 - **Stdio** transport (standard MCP protocol)
+
+## Auth Flow
+
+```
+onedrive-mcp auth
+    │
+    ├─ Cached token? ──→ Silent refresh ──→ Done
+    │
+    ├─ Windows + broker? ──→ Native SSO popup ──→ Done
+    │
+    └─ Device code flow ──→ microsoft.com/devicelogin
+                               │
+                               └─ Org SSO (IBM/Google/Okta/etc) ──→ Done
+```
 
 ## License
 

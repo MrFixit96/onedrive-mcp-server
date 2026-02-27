@@ -17,11 +17,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+broker = [
+    "pymsalruntime>=0.17",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "respx>=0.22",
     "ruff>=0.9",
+    "pymsalruntime>=0.17",
 ]
 
 [project.scripts]

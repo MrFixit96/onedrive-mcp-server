@@ -33,7 +33,7 @@ logger = logging.getLogger("onedrive_mcp.server")
 
 # ── Configuration ───────────────────────────────────────────────────────
 
-CLIENT_ID = os.environ.get("ONEDRIVE_MCP_CLIENT_ID", "")
+CLIENT_ID = os.environ.get("ONEDRIVE_MCP_CLIENT_ID") or None
 TENANT_ID = os.environ.get("ONEDRIVE_MCP_TENANT_ID", "common")
 DOWNLOAD_DIR = Path(os.environ.get("ONEDRIVE_MCP_DOWNLOAD_DIR", ".")).resolve()
 
@@ -52,11 +52,6 @@ _graph: GraphClient | None = None
 def _get_graph() -> GraphClient:
     global _auth, _graph
     if _graph is None:
-        if not CLIENT_ID:
-            raise RuntimeError(
-                "ONEDRIVE_MCP_CLIENT_ID env var is required. "
-                "Set it to your Azure AD app registration client ID."
-            )
         _auth = Auth(CLIENT_ID, TENANT_ID)
         _graph = GraphClient(_auth)
     return _graph
