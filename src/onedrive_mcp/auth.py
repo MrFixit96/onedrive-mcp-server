@@ -154,8 +154,10 @@ class Auth:
         if os.name != "nt":
             os.chmod(CACHE_FILE, stat.S_IRUSR | stat.S_IWUSR)
         else:
+            import re as _re
+
             username = os.environ.get("USERNAME", "")
-            if username:
+            if username and _re.match(r"^[a-zA-Z0-9._\- ]+$", username):
                 subprocess.run(
                     [
                         "icacls", str(CACHE_FILE),

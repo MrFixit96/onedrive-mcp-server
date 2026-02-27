@@ -125,18 +125,22 @@ class GraphClient:
         normalized = self._normalize_path(remote_path)
         if not normalized:
             raise ValueError("Remote path cannot be empty")
-        if not local_path.exists():
-            raise FileNotFoundError(f"Local file not found: {local_path}")
 
-        file_size = local_path.stat().st_size
-        if file_size <= SIMPLE_UPLOAD_LIMIT:
-            return await self._simple_upload(local_path, normalized)
-        return await self._session_upload(local_path, normalized, file_size)
+        # Open file once to avoid TOCTOU race conditions
+        try:
+            content = local_path.read_bytes()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Local file not found: {local_path}") from None
+        except IsADirectoryError:
+            raise ValueError(f"Path is a directory, not a file: {local_path}") from None
 
-    async def _simple_upload(
-        self, local_path: Path, remote_path: str
+        if len(content) <= SIMPLE_UPLOAD_LIMIT:
+            return await self._simple_upload_bytes(content, normalized)
+        return await self._session_upload(local_path, normalized, len(content))
+
+    async def _simple_upload_bytes(
+        self, content: bytes, remote_path: str
     ) -> dict[str, Any]:
-        content = local_path.read_bytes()
         resp = await self._request(
             "PUT",
             f"/me/drive/root:/{remote_path}:/content",

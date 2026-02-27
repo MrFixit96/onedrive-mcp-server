@@ -225,10 +225,6 @@ async def upload_file(local_path: str, remote_path: str) -> str:
         remote_path: Destination path in OneDrive (e.g. "Documents/report.docx").
     """
     local = Path(local_path).resolve()
-    if not local.exists():
-        return json.dumps({"error": f"File not found: {local.name}"})
-    if not local.is_file():
-        return json.dumps({"error": f"Not a file: {local.name}"})
     graph = _get_graph()
     result = await graph.upload_file(local, remote_path)
     return json.dumps(result, indent=2)
