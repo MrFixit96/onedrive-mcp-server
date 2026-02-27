@@ -31,8 +31,8 @@ Your org's SSO handles the rest.
 
 ## Security
 
-- **Zero-config auth**: Uses VS Code's Microsoft-authentication client ID — a Microsoft first-party app pre-approved in virtually every enterprise tenant. No Azure AD app registration required.
-- **Enterprise-friendly**: Uses `/organizations` tenant authority (work/school accounts only), bypassing third-party app consent policies that block custom client IDs
+- **Zero-config auth**: Uses Microsoft Office Desktop Apps client ID — a Microsoft first-party app preauthorized for Files access on Graph API and pre-approved in every enterprise tenant. No Azure AD app registration required.
+- **Enterprise-friendly**: Uses `/organizations` tenant authority (work/school accounts only), bypassing third-party app consent policies
 - **Windows SSO**: WAM broker integration uses your existing Windows Microsoft account
 - **OS keyring token storage**: Windows Credential Vault, macOS Keychain, or Linux SecretService (falls back to owner-only file)
 - **Narrow OAuth scopes**: Only `Files.ReadWrite` + `User.Read` — no mail, calendar, or contacts access
@@ -109,7 +109,7 @@ onedrive-mcp auth
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ONEDRIVE_MCP_CLIENT_ID` | No | VS Code auth ID | Override with custom Azure AD app client ID |
+| `ONEDRIVE_MCP_CLIENT_ID` | No | Office Desktop ID | Override with custom Azure AD app client ID |
 | `ONEDRIVE_MCP_TENANT_ID` | No | `organizations` | Azure AD tenant (work/school accounts by default) |
 | `ONEDRIVE_MCP_DOWNLOAD_DIR` | No | `.` (cwd) | Base directory for file downloads |
 | `ONEDRIVE_MCP_LOG_LEVEL` | No | `INFO` | Audit log level (DEBUG, INFO, WARNING, ERROR) |

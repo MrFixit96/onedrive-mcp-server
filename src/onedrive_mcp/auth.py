@@ -24,13 +24,12 @@ import msal
 
 logger = logging.getLogger("onedrive_mcp.auth")
 
-# VS Code's Microsoft authentication client ID — a Microsoft first-party
-# multi-tenant public client, publicly embedded in VS Code's MIT-licensed
-# source (extensions/microsoft-authentication/src/common/scopeData.ts).
-# Pre-approved in virtually every enterprise tenant that uses VS Code.
-# Supports device code flow and dynamic consent for any Graph scope.
+# Microsoft Office Desktop Apps — a Microsoft first-party app used by Word,
+# Excel, and PowerPoint to access OneDrive files.  Pre-authorized for
+# Files.ReadWrite on Microsoft Graph and pre-approved in every enterprise
+# tenant.  Supports device code flow.
 # Override with ONEDRIVE_MCP_CLIENT_ID env var if needed.
-DEFAULT_CLIENT_ID = "aebc6443-996d-45c2-90f0-388ff96faa56"
+DEFAULT_CLIENT_ID = "d3590ed6-52b3-4102-aeff-aad2292ab01c"
 DEFAULT_TENANT = "organizations"
 
 KEYRING_SERVICE = "onedrive-mcp"
