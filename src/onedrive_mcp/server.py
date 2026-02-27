@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from .auth import Auth
 from .graph import GraphClient
@@ -42,7 +43,14 @@ def _get_graph() -> GraphClient:
     return _graph
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List OneDrive Files",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
 async def list_files(folder_path: str = "/") -> str:
     """List files and folders in a OneDrive directory.
 
@@ -54,7 +62,14 @@ async def list_files(folder_path: str = "/") -> str:
     return json.dumps(items, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get File Metadata",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
 async def get_file_metadata(file_path: str) -> str:
     """Get metadata for a file in OneDrive (size, type, modified date, creator).
 
@@ -66,7 +81,15 @@ async def get_file_metadata(file_path: str) -> str:
     return json.dumps(metadata, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Upload File to OneDrive",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def upload_file(local_path: str, remote_path: str) -> str:
     """Upload a local file to OneDrive. Files over 4 MB use resumable upload.
 
@@ -84,7 +107,14 @@ async def upload_file(local_path: str, remote_path: str) -> str:
     return json.dumps(result, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Create Sharing Link",
+        readOnlyHint=False,
+        destructiveHint=False,
+        openWorldHint=True,
+    ),
+)
 async def create_sharing_link(
     file_path: str,
     link_type: str = "view",
@@ -102,7 +132,15 @@ async def create_sharing_link(
     return json.dumps(result, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Download File from OneDrive",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def download_file(remote_path: str, save_directory: str = "") -> str:
     """Download a file from OneDrive to the local filesystem.
 
@@ -118,7 +156,14 @@ async def download_file(remote_path: str, save_directory: str = "") -> str:
     return json.dumps({"saved_to": str(saved), "size": saved.stat().st_size})
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Search OneDrive Files",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
 async def search_files(query: str) -> str:
     """Search for files in OneDrive by name or content.
 
