@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src/ tests/
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v
+
+  mcp-scan:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Install mcp-scan
+        run: pip install mcp-scan
+      - name: Create scan config
+        run: |
+          cat > scan-config.json << 'EOF'
+          {
+            "mcpServers": {
+              "onedrive": {
+                "command": "python",
+                "args": ["-m", "onedrive_mcp"],
+                "env": {
+                  "ONEDRIVE_MCP_CLIENT_ID": "ci-scan-placeholder"
+                }
+              }
+            }
+          }
+          EOF
+      - name: Run MCP security scan
+        run: mcp-scan scan scan-config.json --json --server-timeout 15 2>/dev/null | tee scan-results.json
+      - name: Check for prompt injection
+        run: |
+          if grep -q '"code": "P001"' scan-results.json || grep -q '"code": "P002"' scan-results.json; then
+            echo "CRITICAL: Prompt injection or tool poisoning detected!"
+            exit 1
+          fi
+          echo "No prompt injection or tool poisoning found."

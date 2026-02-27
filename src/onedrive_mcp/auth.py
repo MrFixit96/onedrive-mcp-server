@@ -1,9 +1,11 @@
 """Secure MSAL authentication for Microsoft Graph API.
 
-Uses device code flow for interactive auth and caches tokens with
-restrictive file permissions to prevent credential leakage.
+Primary storage: OS keyring (Windows Credential Vault, macOS Keychain,
+Linux SecretService). Falls back to an owner-only file if keyring is
+unavailable.
 """
 
+import logging
 import os
 import stat
 import subprocess
@@ -12,17 +14,38 @@ from pathlib import Path
 
 import msal
 
+logger = logging.getLogger("onedrive_mcp.auth")
+
+KEYRING_SERVICE = "onedrive-mcp"
+KEYRING_KEY = "msal_token_cache"
 CONFIG_DIR = Path.home() / ".config" / "onedrive-mcp"
 CACHE_FILE = CONFIG_DIR / "token_cache.json"
 SCOPES = ["Files.ReadWrite", "User.Read"]
 
 
+def _keyring_available() -> bool:
+    """Check if OS keyring backend is usable."""
+    try:
+        import keyring
+        import keyring.errors
+
+        # Probe for a real backend (not the fail backend)
+        backend = keyring.get_keyring()
+        name = type(backend).__name__
+        if "Fail" in name or "null" in name.lower():
+            return False
+        return True
+    except Exception:
+        return False
+
+
 class Auth:
-    """MSAL public client auth with secure token caching."""
+    """MSAL public client auth with OS-keyring-backed token caching."""
 
     def __init__(self, client_id: str, tenant_id: str = "common"):
         self.client_id = client_id
         self.tenant_id = tenant_id
+        self._use_keyring = _keyring_available()
         self.cache = msal.SerializableTokenCache()
         self._load_cache()
         self.app = msal.PublicClientApplication(
@@ -30,16 +53,63 @@ class Auth:
             authority=f"https://login.microsoftonline.com/{tenant_id}",
             token_cache=self.cache,
         )
+        if self._use_keyring:
+            logger.debug("Using OS keyring for token storage")
+        else:
+            logger.debug("Keyring unavailable; falling back to file cache")
+
+    # ── Cache I/O ───────────────────────────────────────────────────────
 
     def _load_cache(self) -> None:
-        if CACHE_FILE.exists():
-            self.cache.deserialize(CACHE_FILE.read_text(encoding="utf-8"))
+        data = self._read_from_keyring() or self._read_from_file()
+        if data:
+            self.cache.deserialize(data)
 
     def _save_cache(self) -> None:
         if not self.cache.has_state_changed:
             return
+        serialized = self.cache.serialize()
+        if self._use_keyring:
+            self._write_to_keyring(serialized)
+            # Remove file cache if migrating to keyring
+            if CACHE_FILE.exists():
+                CACHE_FILE.unlink()
+                logger.info("Migrated token cache from file to OS keyring")
+        else:
+            self._write_to_file(serialized)
+
+    # ── Keyring backend ─────────────────────────────────────────────────
+
+    def _read_from_keyring(self) -> str | None:
+        if not self._use_keyring:
+            return None
+        try:
+            import keyring
+
+            return keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
+        except Exception:
+            return None
+
+    def _write_to_keyring(self, data: str) -> None:
+        try:
+            import keyring
+
+            keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, data)
+        except Exception as exc:
+            logger.warning("Keyring write failed, falling back to file: %s", exc)
+            self._use_keyring = False
+            self._write_to_file(data)
+
+    # ── File backend (fallback) ─────────────────────────────────────────
+
+    def _read_from_file(self) -> str | None:
+        if CACHE_FILE.exists():
+            return CACHE_FILE.read_text(encoding="utf-8")
+        return None
+
+    def _write_to_file(self, data: str) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        CACHE_FILE.write_text(self.cache.serialize(), encoding="utf-8")
+        CACHE_FILE.write_text(data, encoding="utf-8")
         self._secure_cache_file()
 
     def _secure_cache_file(self) -> None:
@@ -58,6 +128,8 @@ class Auth:
                     capture_output=True,
                     check=False,
                 )
+
+    # ── Token acquisition ───────────────────────────────────────────────
 
     def get_token(self) -> str:
         """Get a valid access token, refreshing silently if cached."""

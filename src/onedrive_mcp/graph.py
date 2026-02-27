@@ -2,9 +2,12 @@
 
 Handles list, upload (simple + resumable session), download (path-validated),
 sharing link creation, metadata retrieval, and search.
+Error messages are sanitized before propagation.
 """
 
 import asyncio
+import logging
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
@@ -13,9 +16,25 @@ import httpx
 
 from .auth import Auth
 
+logger = logging.getLogger("onedrive_mcp.graph")
+
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB upload chunks
 SIMPLE_UPLOAD_LIMIT = 4 * 1024 * 1024  # Files under 4 MB use simple PUT
+
+# Patterns to strip from error messages before returning to the LLM
+_SANITIZE_PATTERNS = [
+    re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE),
+    re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"),
+    re.compile(r"https://[^\s]*upload\.microsoft\.com[^\s]*"),
+]
+
+
+def _sanitize_error(msg: str) -> str:
+    """Remove tokens, correlation IDs, and internal URLs from error text."""
+    for pattern in _SANITIZE_PATTERNS:
+        msg = pattern.sub("[REDACTED]", msg)
+    return msg
 
 
 class GraphAPIError(Exception):
@@ -23,7 +42,8 @@ class GraphAPIError(Exception):
 
     def __init__(self, status: int, message: str):
         self.status = status
-        super().__init__(f"Graph API {status}: {message}")
+        self.safe_message = _sanitize_error(message)
+        super().__init__(f"Graph API {status}: {self.safe_message}")
 
 
 class GraphClient:
