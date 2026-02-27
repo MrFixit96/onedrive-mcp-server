@@ -10,15 +10,16 @@ from onedrive_mcp.graph import GraphClient
 from onedrive_mcp.server import (
     _get_graph,
     _redact_path,
+    _resolve_share_url,
     audited_tool,
     mcp,
 )
 
 
 class TestToolRegistration:
-    def test_six_tools_registered(self):
+    def test_seven_tools_registered(self):
         tools = mcp._tool_manager._tools
-        assert len(tools) == 6
+        assert len(tools) == 7
 
     def test_tool_names(self):
         names = set(mcp._tool_manager._tools.keys())
@@ -29,6 +30,7 @@ class TestToolRegistration:
             "download_file",
             "create_sharing_link",
             "search_files",
+            "generate_share_url",
         }
         assert names == expected
 
@@ -165,3 +167,126 @@ class TestHTTPMode:
         finally:
             srv._transport_mode = "stdio"
             srv._graph = None
+
+
+class TestResolveShareUrl:
+    def test_file_not_found(self, tmp_path):
+        result = _resolve_share_url(str(tmp_path / "nonexistent.txt"))
+        assert "error" in result
+        assert "not found" in result["error"].lower()
+
+    def test_business_account_mapping(self, tmp_path):
+        """Test URL construction with mocked OneDrive accounts."""
+        # Create a fake synced file
+        docs = tmp_path / "Documents" / "Reports"
+        docs.mkdir(parents=True)
+        test_file = docs / "quarterly.docx"
+        test_file.write_text("test")
+
+        fake_accounts = [
+            {
+                "local_folder": str(tmp_path),
+                "spo_url": "https://contoso-my.sharepoint.com/personal/user_contoso_com",
+                "email": "user@contoso.com",
+                "type": "business",
+            }
+        ]
+
+        with patch("onedrive_mcp.server._discover_onedrive_accounts", return_value=fake_accounts):
+            result = _resolve_share_url(str(test_file))
+
+        assert "url" in result
+        assert "contoso-my.sharepoint.com" in result["url"]
+        assert "Documents/Reports/quarterly.docx" in result["url"]
+        assert result["account_type"] == "business"
+
+    def test_personal_account_returns_error(self, tmp_path):
+        test_file = tmp_path / "file.txt"
+        test_file.write_text("test")
+
+        fake_accounts = [
+            {
+                "local_folder": str(tmp_path),
+                "spo_url": "",
+                "email": "user@hotmail.com",
+                "type": "personal",
+            }
+        ]
+
+        with patch("onedrive_mcp.server._discover_onedrive_accounts", return_value=fake_accounts):
+            result = _resolve_share_url(str(test_file))
+
+        assert "error" in result
+        assert result["account_type"] == "personal"
+
+    def test_file_outside_onedrive(self, tmp_path):
+        test_file = tmp_path / "outside.txt"
+        test_file.write_text("test")
+
+        fake_accounts = [
+            {
+                "local_folder": str(tmp_path / "OneDrive"),
+                "spo_url": "https://example.sharepoint.com",
+                "email": "a@b.com",
+                "type": "business",
+            }
+        ]
+
+        with patch("onedrive_mcp.server._discover_onedrive_accounts", return_value=fake_accounts):
+            result = _resolve_share_url(str(test_file))
+
+        assert "error" in result
+        assert "not inside" in result["error"].lower()
+
+    def test_no_accounts_found(self, tmp_path):
+        test_file = tmp_path / "file.txt"
+        test_file.write_text("test")
+
+        with patch("onedrive_mcp.server._discover_onedrive_accounts", return_value=[]):
+            result = _resolve_share_url(str(test_file))
+
+        assert "error" in result
+        assert "no onedrive accounts" in result["error"].lower()
+
+    def test_url_encodes_spaces(self, tmp_path):
+        docs = tmp_path / "My Documents"
+        docs.mkdir(parents=True)
+        test_file = docs / "my report.docx"
+        test_file.write_text("test")
+
+        fake_accounts = [
+            {
+                "local_folder": str(tmp_path),
+                "spo_url": "https://contoso-my.sharepoint.com/personal/user",
+                "email": "user@contoso.com",
+                "type": "business",
+            }
+        ]
+
+        with patch("onedrive_mcp.server._discover_onedrive_accounts", return_value=fake_accounts):
+            result = _resolve_share_url(str(test_file))
+
+        assert "url" in result
+        assert "%20" in result["url"] or "my%20report" in result["url"].lower()
+        # No raw spaces in URL
+        assert " " not in result["url"]
+
+    def test_env_var_fallback(self, tmp_path, monkeypatch):
+        test_file = tmp_path / "file.txt"
+        test_file.write_text("test")
+
+        monkeypatch.setenv(
+            "ONEDRIVE_MCP_SHARE_MAP",
+            f"{tmp_path}|https://example.sharepoint.com/personal/user",
+        )
+
+        # Patch registry discovery to return empty (simulate non-Windows)
+        with patch("onedrive_mcp.server.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            # Re-import to test env var fallback path
+            from onedrive_mcp.server import _discover_onedrive_accounts
+
+            accounts = _discover_onedrive_accounts()
+
+        # On actual Windows it'll find registry accounts; this tests the env var parsing
+        assert len(accounts) >= 1

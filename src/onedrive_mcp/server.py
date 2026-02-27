@@ -14,11 +14,16 @@ Errors are sanitized before returning to the LLM.
 import json
 import logging
 import os
+import sys
 import time
 from collections.abc import Callable, Coroutine
 from functools import wraps
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+
+if sys.platform == "win32":
+    import winreg
 
 import jwt
 from mcp.server.auth.provider import AccessToken
@@ -297,6 +302,143 @@ async def search_files(query: str) -> str:
     graph = _get_graph()
     results = await graph.search_files(query)
     return json.dumps(results, indent=2)
+
+
+def _discover_onedrive_accounts() -> list[dict[str, str]]:
+    """Read OneDrive account mappings from the Windows registry.
+
+    Returns a list of dicts with keys: local_folder, spo_url, email, type.
+    Falls back to ONEDRIVE_MCP_SHARE_MAP env var on non-Windows platforms.
+    Format: "local_path|spo_base_url;local_path2|spo_base_url2"
+    """
+    accounts: list[dict[str, str]] = []
+
+    # Try Windows registry first
+    if sys.platform == "win32":
+        try:
+            base_key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\OneDrive\Accounts",
+            )
+            idx = 0
+            while True:
+                try:
+                    sub_name = winreg.EnumKey(base_key, idx)
+                    idx += 1
+                    sub_key = winreg.OpenKey(base_key, sub_name)
+                    try:
+                        user_folder = winreg.QueryValueEx(sub_key, "UserFolder")[0]
+                    except FileNotFoundError:
+                        continue
+                    spo_url = ""
+                    email = ""
+                    acct_type = "personal"
+                    try:
+                        endpoint = winreg.QueryValueEx(sub_key, "ServiceEndpointUri")[0]
+                        # Strip /_api suffix to get the base SharePoint URL
+                        spo_url = endpoint.rsplit("/_api", 1)[0]
+                        acct_type = "business"
+                    except FileNotFoundError:
+                        pass
+                    try:
+                        email = winreg.QueryValueEx(sub_key, "UserEmail")[0]
+                    except FileNotFoundError:
+                        pass
+                    accounts.append({
+                        "local_folder": user_folder,
+                        "spo_url": spo_url,
+                        "email": email,
+                        "type": acct_type,
+                    })
+                except OSError:
+                    break
+        except OSError:
+            pass
+
+    # Fallback: env var for non-Windows or if registry is empty
+    if not accounts:
+        share_map = os.environ.get("ONEDRIVE_MCP_SHARE_MAP", "")
+        for entry in share_map.split(";"):
+            if "|" in entry:
+                local, url = entry.split("|", 1)
+                accounts.append({
+                    "local_folder": local.strip(),
+                    "spo_url": url.strip(),
+                    "email": "",
+                    "type": "business",
+                })
+
+    return accounts
+
+
+def _resolve_share_url(local_path: str) -> dict[str, str]:
+    """Map a local file path to its SharePoint/OneDrive web URL.
+
+    Returns dict with url, account_email, account_type, or error.
+    """
+    resolved = Path(local_path).resolve()
+    if not resolved.exists():
+        return {"error": f"File not found: {resolved.name}"}
+
+    accounts = _discover_onedrive_accounts()
+    if not accounts:
+        return {"error": "No OneDrive accounts found. Set ONEDRIVE_MCP_SHARE_MAP env var."}
+
+    # Sort by longest path first for best match
+    accounts.sort(key=lambda a: len(a["local_folder"]), reverse=True)
+
+    for acct in accounts:
+        acct_folder = Path(acct["local_folder"]).resolve()
+        try:
+            rel = resolved.relative_to(acct_folder)
+        except ValueError:
+            continue
+
+        if acct["type"] == "business" and acct["spo_url"]:
+            # Business: construct SharePoint URL
+            # OneDrive Business syncs to /Documents/ library
+            rel_posix = rel.as_posix()
+            encoded_path = quote(rel_posix, safe="/")
+            url = f"{acct['spo_url']}/Documents/{encoded_path}"
+            return {
+                "url": url,
+                "account_email": acct["email"],
+                "account_type": "business",
+                "note": "Recipients in the same tenant can open this URL directly with SSO.",
+            }
+        else:
+            return {
+                "error": "Personal OneDrive detected. Sharing links require Graph API.",
+                "account_email": acct["email"],
+                "account_type": "personal",
+                "suggestion": "Move the file to your Business OneDrive folder "
+                "for direct URL sharing.",
+            }
+
+    return {"error": f"File is not inside any synced OneDrive folder: {resolved.name}"}
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Generate Share URL",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+@audited_tool
+async def generate_share_url(local_path: str) -> str:
+    """Generate a SharePoint direct URL for a locally synced OneDrive file.
+
+    Works without Graph API authentication by reading the OneDrive sync
+    configuration from the Windows registry and mapping local paths to
+    their corresponding SharePoint URLs.
+
+    Args:
+        local_path: Absolute path to a file inside a synced OneDrive folder.
+    """
+    result = _resolve_share_url(local_path)
+    return json.dumps(result, indent=2)
 
 
 def serve() -> None:
