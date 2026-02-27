@@ -3,6 +3,10 @@
 Tools: list_files, get_file_metadata, upload_file, download_file,
 create_sharing_link, search_files.
 
+Supports two transport modes:
+  - stdio:  MSAL-based auth (device code / broker) — default
+  - http:   RFC 9728 Bearer token passthrough — MCP client handles OAuth
+
 All tool invocations are audit-logged to stderr as structured JSON.
 Errors are sanitized before returning to the LLM.
 """
@@ -16,10 +20,12 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+import jwt
+from mcp.server.auth.provider import AccessToken
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import AuthSettings
 from mcp.types import ToolAnnotations
 
-from .auth import Auth
 from .graph import GraphClient
 
 # ── Logging setup ───────────────────────────────────────────────────────
@@ -36,6 +42,10 @@ logger = logging.getLogger("onedrive_mcp.server")
 CLIENT_ID = os.environ.get("ONEDRIVE_MCP_CLIENT_ID") or None
 TENANT_ID = os.environ.get("ONEDRIVE_MCP_TENANT_ID") or None
 DOWNLOAD_DIR = Path(os.environ.get("ONEDRIVE_MCP_DOWNLOAD_DIR", ".")).resolve()
+HTTP_PORT = int(os.environ.get("ONEDRIVE_MCP_PORT", "3001"))
+
+# Transport mode: set by serve() or serve_http()
+_transport_mode: str = "stdio"
 
 mcp = FastMCP(
     "onedrive",
@@ -45,16 +55,59 @@ mcp = FastMCP(
     ),
 )
 
-_auth: Auth | None = None
+_auth: Any = None  # Auth instance (stdio mode only)
 _graph: GraphClient | None = None
+
+
+def _http_token_provider() -> str:
+    """Read Bearer token from the MCP auth context (HTTP mode only)."""
+    from mcp.server.auth.middleware.auth_context import get_access_token
+
+    access_token = get_access_token()
+    if access_token is None:
+        raise RuntimeError("No authenticated user — is the MCP client sending a Bearer token?")
+    return access_token.token
 
 
 def _get_graph() -> GraphClient:
     global _auth, _graph
-    if _graph is None:
-        _auth = Auth(CLIENT_ID, TENANT_ID)
-        _graph = GraphClient(_auth)
-    return _graph
+    if _transport_mode == "http":
+        # HTTP mode: reuse client, token comes from auth context per-request
+        if _graph is None:
+            _graph = GraphClient(token_provider=_http_token_provider)
+        return _graph
+    else:
+        # Stdio mode: use MSAL auth
+        if _graph is None:
+            from .auth import Auth
+
+            _auth = Auth(CLIENT_ID, TENANT_ID)
+            _graph = GraphClient(token_provider=_auth.get_token)
+        return _graph
+
+
+# ── Token verifier (HTTP mode) ─────────────────────────────────────────
+
+
+class PassthroughTokenVerifier:
+    """Decode JWT claims without cryptographic verification.
+
+    The MCP client (VS Code) already authenticated the user.
+    Microsoft Graph validates the token server-side on every API call.
+    We extract claims only for audit logging and expiry checking.
+    """
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        try:
+            claims = jwt.decode(token, options={"verify_signature": False})
+            return AccessToken(
+                token=token,
+                client_id=claims.get("appid", claims.get("azp", "unknown")),
+                scopes=claims.get("scp", "").split(),
+                expires_at=claims.get("exp"),
+            )
+        except Exception:
+            return None
 
 
 # ── Audit + error wrapper ──────────────────────────────────────────────
@@ -247,6 +300,32 @@ async def search_files(query: str) -> str:
 
 
 def serve() -> None:
-    """Start the MCP server on stdio transport."""
-    logger.info("OneDrive MCP server starting")
+    """Start the MCP server on stdio transport (MSAL auth)."""
+    global _transport_mode
+    _transport_mode = "stdio"
+    logger.info("OneDrive MCP server starting (stdio)")
     mcp.run()
+
+
+def serve_http(port: int | None = None) -> None:
+    """Start the MCP server on HTTP transport (RFC 9728 Bearer token auth).
+
+    The MCP client handles the full OAuth flow and passes Bearer tokens.
+    """
+    global _transport_mode
+    _transport_mode = "http"
+    actual_port = port or HTTP_PORT
+    tenant = TENANT_ID or "organizations"
+
+    # Configure auth for HTTP mode
+    mcp.settings.auth = AuthSettings(
+        issuer_url=f"https://login.microsoftonline.com/{tenant}/v2.0",
+        resource_server_url=f"http://localhost:{actual_port}",
+        required_scopes=["Files.ReadWrite", "User.Read"],
+    )
+    mcp._token_verifier = PassthroughTokenVerifier()
+    mcp.settings.port = actual_port
+    mcp.settings.host = "127.0.0.1"
+
+    logger.info("OneDrive MCP server starting (HTTP on port %d)", actual_port)
+    mcp.run(transport="streamable-http")

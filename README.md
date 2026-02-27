@@ -17,22 +17,30 @@ Built as a secure alternative after a [security audit](https://github.com/MrFixi
 
 ## Quick Start
 
-```bash
-# Install
-pip install git+https://github.com/MrFixit96/onedrive-mcp-server.git
+**Option A: HTTP mode (recommended for enterprise — zero-config SSO)**
 
-# Sign in with your Microsoft account (SSO — no app registration needed)
-onedrive-mcp auth
+```bash
+pip install git+https://github.com/MrFixit96/onedrive-mcp-server.git
+onedrive-mcp --http
 ```
 
-That's it. On Windows, a native SSO popup uses your existing Microsoft account.
-On other platforms, you'll get a device code to enter at microsoft.com/devicelogin.
-Your org's SSO handles the rest.
+The MCP client (VS Code, Claude Code) handles all OAuth automatically.
+When it first needs OneDrive access, VS Code shows its standard "Sign in with Microsoft" prompt.
+No device codes, no app registration, no environment variables.
+
+**Option B: Stdio mode (with MSAL device-code auth)**
+
+```bash
+pip install git+https://github.com/MrFixit96/onedrive-mcp-server.git
+onedrive-mcp auth   # One-time sign-in
+onedrive-mcp        # Start server
+```
 
 ## Security
 
-- **Zero-config auth**: Uses Microsoft Office Desktop Apps client ID — a Microsoft first-party app preauthorized for Files access on Graph API and pre-approved in every enterprise tenant. No Azure AD app registration required.
-- **Enterprise-friendly**: Uses `/organizations` tenant authority (work/school accounts only), bypassing third-party app consent policies
+- **Zero-config auth (HTTP mode)**: MCP client handles OAuth via RFC 9728 Protected Resource Metadata — no client IDs, no app registration, no environment variables
+- **Enterprise-friendly**: Works in tenants that block third-party app consent — the MCP client uses its own pre-approved credentials
+- **Passthrough token validation**: Bearer tokens decoded for audit logging; Microsoft Graph validates cryptographically on every API call
 - **Windows SSO**: WAM broker integration uses your existing Windows Microsoft account
 - **OS keyring token storage**: Windows Credential Vault, macOS Keychain, or Linux SecretService (falls back to owner-only file)
 - **Narrow OAuth scopes**: Only `Files.ReadWrite` + `User.Read` — no mail, calendar, or contacts access
@@ -58,6 +66,21 @@ pip install -e ".[dev]"
 
 ## Authentication
 
+### HTTP Mode (recommended)
+
+```bash
+onedrive-mcp --http              # Start on default port 3001
+onedrive-mcp --http --port 8080  # Custom port
+```
+
+No setup needed. The MCP client (VS Code) handles the entire OAuth flow:
+1. Client discovers required scopes via `/.well-known/oauth-protected-resource`
+2. Client authenticates with Microsoft using its own approved credentials
+3. Client passes Bearer tokens to the server on every request
+4. Microsoft Graph validates the token server-side
+
+### Stdio Mode (fallback)
+
 ```bash
 # Just sign in — no environment variables needed
 onedrive-mcp auth
@@ -81,7 +104,20 @@ onedrive-mcp auth
 
 ## MCP Server Configuration
 
-### Claude Code
+### Claude Code (HTTP mode — recommended)
+
+```json
+{
+  "mcpServers": {
+    "onedrive": {
+      "type": "http",
+      "url": "http://localhost:3001/mcp"
+    }
+  }
+}
+```
+
+### Claude Code (stdio mode)
 
 ```json
 {
@@ -93,13 +129,16 @@ onedrive-mcp auth
 }
 ```
 
-### GitHub Copilot CLI
+### VS Code Copilot (HTTP mode)
 
 ```json
 {
-  "mcpServers": {
-    "onedrive": {
-      "command": "onedrive-mcp"
+  "mcp": {
+    "servers": {
+      "onedrive": {
+        "type": "http",
+        "url": "http://localhost:3001/mcp"
+      }
     }
   }
 }
@@ -109,8 +148,9 @@ onedrive-mcp auth
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ONEDRIVE_MCP_CLIENT_ID` | No | Office Desktop ID | Override with custom Azure AD app client ID |
-| `ONEDRIVE_MCP_TENANT_ID` | No | `organizations` | Azure AD tenant (work/school accounts by default) |
+| `ONEDRIVE_MCP_CLIENT_ID` | No | Office Desktop ID | Override with custom Azure AD app client ID (stdio mode only) |
+| `ONEDRIVE_MCP_TENANT_ID` | No | `organizations` | Azure AD tenant (stdio mode only) |
+| `ONEDRIVE_MCP_PORT` | No | `3001` | HTTP server port (HTTP mode only) |
 | `ONEDRIVE_MCP_DOWNLOAD_DIR` | No | `.` (cwd) | Base directory for file downloads |
 | `ONEDRIVE_MCP_LOG_LEVEL` | No | `INFO` | Audit log level (DEBUG, INFO, WARNING, ERROR) |
 
@@ -159,8 +199,9 @@ src/onedrive_mcp/
 └── server.py         # FastMCP server with 6 tools + audit logging
 ```
 
-- **~350 lines** of core logic (auth + graph + server)
-- **43 tests** covering auth, graph API, server tools, error sanitization, audit logging
+- **~400 lines** of core logic (auth + graph + server)
+- **47 tests** covering auth, graph API, server tools, error sanitization, HTTP mode, token verifier
+- **Dual transport**: stdio (MSAL auth) + HTTP (RFC 9728 Bearer token passthrough)
 - **Zero** third-party MCP wrappers — uses official `mcp` SDK
 - **Async** httpx for HTTP, sync MSAL wrapped via `asyncio.to_thread`
 - **Stdio** transport (standard MCP protocol)
@@ -168,15 +209,27 @@ src/onedrive_mcp/
 ## Auth Flow
 
 ```
-onedrive-mcp auth
-    │
-    ├─ Cached token? ──→ Silent refresh ──→ Done
-    │
-    ├─ Windows + broker? ──→ Native SSO popup ──→ Done
-    │
-    └─ Device code flow ──→ microsoft.com/devicelogin
-                               │
-                               └─ Org SSO (IBM/Google/Okta/etc) ──→ Done
+HTTP Mode (--http):
+  MCP Client (VS Code)
+      │
+      ├─ GET /.well-known/oauth-protected-resource
+      │     → learns required scopes + auth server
+      │
+      ├─ OAuth with Microsoft (client's own credentials)
+      │
+      └─ POST /mcp with Authorization: Bearer <token>
+            → server passes token to Graph API
+
+Stdio Mode (default):
+  onedrive-mcp auth
+      │
+      ├─ Cached token? ──→ Silent refresh ──→ Done
+      │
+      ├─ Windows + broker? ──→ Native SSO popup ──→ Done
+      │
+      └─ Device code flow ──→ microsoft.com/devicelogin
+                                   │
+                                   └─ Org SSO ──→ Done
 ```
 
 ## License

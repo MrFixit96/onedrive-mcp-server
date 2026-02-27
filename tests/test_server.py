@@ -4,6 +4,9 @@ import json
 import logging
 from unittest.mock import patch
 
+import pytest
+
+from onedrive_mcp.graph import GraphClient
 from onedrive_mcp.server import (
     _get_graph,
     _redact_path,
@@ -48,16 +51,18 @@ class TestGetGraph:
 
         srv._graph = None
         srv._auth = None
+        srv._transport_mode = "stdio"
         with (
             patch("onedrive_mcp.server.CLIENT_ID", None),
-            patch("onedrive_mcp.server.Auth") as mock_auth,
+            patch("onedrive_mcp.server.TENANT_ID", None),
+            patch("onedrive_mcp.auth.Auth") as mock_auth,
             patch("onedrive_mcp.server.GraphClient") as mock_gc,
         ):
-            mock_auth.return_value = "auth_instance"
+            mock_auth_instance = mock_auth.return_value
+            mock_auth_instance.get_token = lambda: "fake"
             mock_gc.return_value = "graph_instance"
             graph = _get_graph()
             assert graph == "graph_instance"
-            # Should have been called with None (which Auth defaults to Graph CLI ID)
             mock_auth.assert_called_once_with(None, None)
 
 
@@ -110,3 +115,53 @@ class TestAuditedToolDecorator:
         assert not any(r"C:\Users\james\secret" in r.message for r in caplog.records)
         # Only filename should appear
         assert any("doc.txt" in r.message for r in caplog.records)
+
+
+class TestPassthroughTokenVerifier:
+    async def test_decodes_valid_jwt(self):
+        import time
+
+        import jwt as pyjwt
+
+        from onedrive_mcp.server import PassthroughTokenVerifier
+
+        verifier = PassthroughTokenVerifier()
+        payload = {
+            "appid": "test-app-id",
+            "scp": "Files.ReadWrite User.Read",
+            "exp": int(time.time()) + 3600,
+        }
+        token = pyjwt.encode(payload, "secret", algorithm="HS256")
+        result = await verifier.verify_token(token)
+        assert result is not None
+        assert result.client_id == "test-app-id"
+        assert "Files.ReadWrite" in result.scopes
+        assert result.token == token
+
+    async def test_returns_none_for_garbage(self):
+        from onedrive_mcp.server import PassthroughTokenVerifier
+
+        verifier = PassthroughTokenVerifier()
+        result = await verifier.verify_token("not-a-jwt")
+        assert result is None
+
+
+class TestHTTPMode:
+    def test_http_token_provider_raises_without_context(self):
+        from onedrive_mcp.server import _http_token_provider
+
+        with pytest.raises(RuntimeError, match="No authenticated user"):
+            _http_token_provider()
+
+    def test_get_graph_http_mode(self):
+        import onedrive_mcp.server as srv
+
+        srv._graph = None
+        srv._transport_mode = "http"
+        try:
+            graph = _get_graph()
+            assert isinstance(graph, GraphClient)
+            assert graph._token_provider is srv._http_token_provider
+        finally:
+            srv._transport_mode = "stdio"
+            srv._graph = None

@@ -8,13 +8,12 @@ Error messages are sanitized before propagation.
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
 import httpx
-
-from .auth import Auth
 
 logger = logging.getLogger("onedrive_mcp.graph")
 
@@ -49,8 +48,8 @@ class GraphAPIError(Exception):
 class GraphClient:
     """Async client for OneDrive operations via Microsoft Graph."""
 
-    def __init__(self, auth: Auth):
-        self.auth = auth
+    def __init__(self, token_provider: Callable[[], str]):
+        self._token_provider = token_provider
         self._client: httpx.AsyncClient | None = None
 
     async def _ensure_client(self) -> httpx.AsyncClient:
@@ -63,7 +62,7 @@ class GraphClient:
         return self._client
 
     async def _get_headers(self) -> dict[str, str]:
-        token = await asyncio.to_thread(self.auth.get_token)
+        token = await asyncio.to_thread(self._token_provider)
         return {"Authorization": f"Bearer {token}"}
 
     async def _request(

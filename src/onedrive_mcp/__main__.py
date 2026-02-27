@@ -1,8 +1,9 @@
 """CLI entry point for onedrive-mcp.
 
 Usage:
-    onedrive-mcp auth    # Sign in with your Microsoft account (SSO)
-    onedrive-mcp         # Start MCP server (stdio)
+    onedrive-mcp auth    # Sign in with your Microsoft account (SSO — stdio mode)
+    onedrive-mcp         # Start MCP server (stdio, MSAL auth)
+    onedrive-mcp --http  # Start MCP server (HTTP, Bearer token from MCP client)
 """
 
 import os
@@ -12,6 +13,8 @@ import sys
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "auth":
         _run_auth()
+    elif "--http" in sys.argv:
+        _run_server_http()
     else:
         _run_server()
 
@@ -19,7 +22,7 @@ def main() -> None:
 def _run_auth() -> None:
     from .auth import Auth
 
-    # Both are optional — defaults to Microsoft Graph CLI Tools client ID
+    # Both are optional — defaults to Office Desktop Apps client ID
     client_id = os.environ.get("ONEDRIVE_MCP_CLIENT_ID") or None
     tenant_id = os.environ.get("ONEDRIVE_MCP_TENANT_ID") or None
 
@@ -36,6 +39,17 @@ def _run_server() -> None:
     from .server import serve
 
     serve()
+
+
+def _run_server_http() -> None:
+    from .server import serve_http
+
+    # Parse optional --port flag
+    port = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--port" and i + 1 < len(sys.argv):
+            port = int(sys.argv[i + 1])
+    serve_http(port=port)
 
 
 if __name__ == "__main__":

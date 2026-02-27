@@ -1,7 +1,5 @@
 """Tests for onedrive_mcp.graph — API client with mocked HTTP."""
 
-from unittest.mock import MagicMock
-
 import httpx
 import pytest
 import respx
@@ -70,14 +68,12 @@ class TestNormalizePath:
 
 @pytest.fixture
 def mock_auth():
-    auth = MagicMock()
-    auth.get_token.return_value = "fake-token"
-    return auth
+    return lambda: "fake-token"
 
 
 @pytest.fixture
 def graph(mock_auth):
-    return GraphClient(mock_auth)
+    return GraphClient(token_provider=mock_auth)
 
 
 class TestListFiles:
