@@ -44,8 +44,10 @@ def _keyring_available() -> bool:
         import keyring.errors
 
         backend = keyring.get_keyring()
-        name = type(backend).__name__
-        if "Fail" in name or "null" in name.lower():
+        # Check the fully-qualified name: keyring.backends.fail.Keyring has
+        # __name__="Keyring" (no "Fail"), so checking __name__ alone misses it.
+        qualified = f"{type(backend).__module__}.{type(backend).__name__}"
+        if "fail" in qualified.lower() or "null" in qualified.lower():
             return False
         return True
     except Exception:
@@ -108,8 +110,10 @@ class Auth:
         serialized = self.cache.serialize()
         if self._use_keyring:
             self._write_to_keyring(serialized)
-            # Remove file cache if migrating to keyring
-            if CACHE_FILE.exists():
+            # Remove file cache only if keyring write actually succeeded.
+            # _write_to_keyring sets _use_keyring=False on failure, so re-check
+            # here to avoid deleting the file we just wrote as a fallback.
+            if self._use_keyring and CACHE_FILE.exists():
                 CACHE_FILE.unlink()
                 logger.info("Migrated token cache from file to OS keyring")
         else:
