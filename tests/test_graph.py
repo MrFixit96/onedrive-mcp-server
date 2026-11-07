@@ -259,3 +259,47 @@ class TestErrorHandling:
             await graph.list_files("/")
         assert exc_info.value.status == 404
         assert "Item not found" in str(exc_info.value)
+
+
+class TestWriteOps:
+    @respx.mock
+    async def test_create_folder_nested(self, graph):
+        route = respx.post(f"{GRAPH_BASE}/me/drive/root:/a/b:/children").mock(
+            return_value=httpx.Response(201, json={"name": "c", "folder": {"childCount": 0}})
+        )
+        result = await graph.create_folder("/a/b/c")
+        assert result["name"] == "c"
+        assert b'"name":"c"' in route.calls[0].request.content.replace(b" ", b"")
+
+    @respx.mock
+    async def test_move_to_root(self, graph):
+        route = respx.patch(f"{GRAPH_BASE}/me/drive/root:/a/x.txt:").mock(
+            return_value=httpx.Response(200, json={"name": "x.txt"})
+        )
+        await graph.update_item("a/x.txt", new_parent="/")
+        assert b'"/drive/root:"' in route.calls[0].request.content
+
+    @respx.mock
+    async def test_rename(self, graph):
+        route = respx.patch(f"{GRAPH_BASE}/me/drive/root:/x.txt:").mock(
+            return_value=httpx.Response(200, json={"name": "y.txt"})
+        )
+        assert (await graph.update_item("x.txt", new_name="y.txt"))["name"] == "y.txt"
+        assert b'"y.txt"' in route.calls[0].request.content
+
+    @respx.mock
+    async def test_delete(self, graph):
+        route = respx.delete(f"{GRAPH_BASE}/me/drive/root:/old.txt:").mock(
+            return_value=httpx.Response(204)
+        )
+        await graph.delete_item("old.txt")
+        assert route.called
+
+    @pytest.mark.parametrize("path", ["", "/", "  "])
+    async def test_root_refused(self, graph, path):
+        with pytest.raises(ValueError):
+            await graph.delete_item(path)
+
+    async def test_rename_rejects_slash(self, graph):
+        with pytest.raises(ValueError, match="plain file name"):
+            await graph.update_item("x.txt", new_name="../y.txt")

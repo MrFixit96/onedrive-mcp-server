@@ -210,6 +210,48 @@ class GraphClient:
             "scope": link.get("scope", ""),
         }
 
+    # ── Create folder / move / rename / delete ──────────────────────────
+
+    def _require_item_path(self, path: str) -> str:
+        normalized = self._normalize_path(path)
+        if not normalized:
+            raise ValueError("Path cannot be empty or the drive root")
+        return normalized
+
+    async def create_folder(self, folder_path: str) -> dict[str, Any]:
+        normalized = self._require_item_path(folder_path)
+        parent, _, name = normalized.rpartition("/")
+        url = f"/me/drive/root:/{parent}:/children" if parent else "/me/drive/root/children"
+        resp = await self._request(
+            "POST",
+            url,
+            json={"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": "fail"},
+        )
+        return self._format_item(resp.json())
+
+    async def update_item(
+        self, path: str, new_parent: str | None = None, new_name: str | None = None
+    ) -> dict[str, Any]:
+        """Move and/or rename an item. Fails if the target name already exists."""
+        normalized = self._require_item_path(path)
+        body: dict[str, Any] = {"@microsoft.graph.conflictBehavior": "fail"}
+        if new_parent is not None:
+            dest = self._normalize_path(new_parent)
+            body["parentReference"] = {"path": f"/drive/root:/{dest}" if dest else "/drive/root:"}
+        if new_name is not None:
+            if not new_name.strip() or "/" in new_name or "\\" in new_name:
+                raise ValueError("new_name must be a plain file name")
+            body["name"] = new_name.strip()
+        if len(body) == 1:
+            raise ValueError("Nothing to change")
+        resp = await self._request("PATCH", f"/me/drive/root:/{normalized}:", json=body)
+        return self._format_item(resp.json())
+
+    async def delete_item(self, path: str) -> None:
+        """Delete an item (goes to the OneDrive recycle bin)."""
+        normalized = self._require_item_path(path)
+        await self._request("DELETE", f"/me/drive/root:/{normalized}:")
+
     # ── Download ────────────────────────────────────────────────────────
 
     async def download_file(self, remote_path: str, save_dir: Path) -> Path:

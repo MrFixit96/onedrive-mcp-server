@@ -6,7 +6,7 @@ Minimal, secure MCP server providing OneDrive file operations via Microsoft Grap
 ## Architecture
 - `src/onedrive_mcp/auth.py` — MSAL device code auth with secure token cache
 - `src/onedrive_mcp/graph.py` — Async Microsoft Graph API client (httpx)
-- `src/onedrive_mcp/server.py` — FastMCP server with 6 tools
+- `src/onedrive_mcp/server.py` — FastMCP server with 11 tools
 - `src/onedrive_mcp/__main__.py` — CLI entry point (auth + serve)
 
 ## Tools
@@ -18,6 +18,10 @@ Minimal, secure MCP server providing OneDrive file operations via Microsoft Grap
 | `upload_file` | Upload local file to OneDrive | No |
 | `download_file` | Download file to local disk | No |
 | `create_sharing_link` | Generate view/edit sharing link | No |
+| `create_folder` | Create a folder (parent must exist) | No |
+| `move_item` | Move file/folder to another folder | No |
+| `rename_item` | Rename file/folder in place | No |
+| `delete_item` | Delete to recycle bin (root refused) | No |
 
 ## Security Design
 - OAuth scopes limited to `Files.ReadWrite` + `User.Read` (no mail, calendar, contacts)

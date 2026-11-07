@@ -283,6 +283,81 @@ async def download_file(remote_path: str, save_directory: str = "") -> str:
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Create OneDrive Folder",
+        readOnlyHint=False,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+@audited_tool
+async def create_folder(folder_path: str) -> str:
+    """Create a folder in OneDrive. Parent folders must already exist.
+
+    Args:
+        folder_path: Full path of the new folder (e.g. "Documents/Reports/2026").
+    """
+    return json.dumps(await _get_graph().create_folder(folder_path), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Move OneDrive Item",
+        readOnlyHint=False,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+@audited_tool
+async def move_item(path: str, destination_folder: str) -> str:
+    """Move a file or folder into another existing folder. Fails if the name is taken there.
+
+    Args:
+        path: Current path (e.g. "Documents/report.docx").
+        destination_folder: Target folder path; "/" for root.
+    """
+    return json.dumps(await _get_graph().update_item(path, new_parent=destination_folder), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Rename OneDrive Item",
+        readOnlyHint=False,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+@audited_tool
+async def rename_item(path: str, new_name: str) -> str:
+    """Rename a file or folder in place. Fails if the new name is taken.
+
+    Args:
+        path: Current path (e.g. "Documents/report.docx").
+        new_name: New name only, no slashes (e.g. "report-final.docx").
+    """
+    return json.dumps(await _get_graph().update_item(path, new_name=new_name), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Delete OneDrive Item",
+        readOnlyHint=False,
+        destructiveHint=True,
+        openWorldHint=False,
+    ),
+)
+@audited_tool
+async def delete_item(path: str) -> str:
+    """Delete a file or folder (and its contents). Recoverable from the OneDrive recycle bin.
+
+    Args:
+        path: Path to delete (e.g. "Documents/old.docx"). The drive root is refused.
+    """
+    await _get_graph().delete_item(path)
+    return json.dumps({"deleted": path})
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Search OneDrive Files",
         readOnlyHint=True,
         destructiveHint=False,

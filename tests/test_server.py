@@ -18,9 +18,9 @@ from onedrive_mcp.server import (
 
 
 class TestToolRegistration:
-    def test_seven_tools_registered(self):
+    def test_eleven_tools_registered(self):
         tools = mcp._tool_manager._tools
-        assert len(tools) == 7
+        assert len(tools) == 11
 
     def test_tool_names(self):
         names = set(mcp._tool_manager._tools.keys())
@@ -32,6 +32,10 @@ class TestToolRegistration:
             "create_sharing_link",
             "search_files",
             "generate_share_url",
+            "create_folder",
+            "move_item",
+            "rename_item",
+            "delete_item",
         }
         assert names == expected
 
